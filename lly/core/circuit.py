@@ -245,15 +245,28 @@ class Circuit:
         """
         A helper method that measures all qubits in the current circuit.
 
-        This method adds a classical register of size ``self.circuit.num_qubits``
-        and measures each quantum bit into the corresponding classical bit.
+        This method adds (or reuses) a classical register of size 
+        ``self.circuit.num_qubits`` and measures each quantum bit 
+        into the corresponding classical bit.
         """
-        n = self.circuit.num_qubits
-        # Create a classical register with `n` bits (matching the number of qubits)
-        self.circuit.add_register(n)
+        from qiskit import ClassicalRegister
 
-        # Measure all qubits (0..n-1) into all classical bits (0..n-1)
+        n = self.circuit.num_qubits
+        if not self.circuit.cregs:
+            # Noch kein klassisches Register -> neues anlegen
+            c_reg = ClassicalRegister(n, "c0")
+            self.circuit.add_register(c_reg)
+        else:
+            # Bereits ein klassisches Register vorhanden, wir nehmen das letzte
+            c_reg = self.circuit.cregs[-1]
+            # Optional: prüfen, ob es genügend Bits hat
+            if c_reg.size < n:
+                raise ValueError("Existing classical register is too small for measure_all.")
+
+        # Nun alle Qubits in die gleichnamigen klassischen Bits messen
         self.circuit.measure(range(n), range(n))
+
+
 
     def copy(self):
         """
