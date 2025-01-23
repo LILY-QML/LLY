@@ -1,0 +1,6 @@
+matplotlib>=3.5.0
+fpdf>=1.7.2
+numpy>=1.21.0
+tensorflow>=2.6.0
+qiskit>=0.41.0
+qiskit-aer>=0.10.0

@@ -1,5 +1,3 @@
-# global.py
-
 from core.circuit import Circuit
 from ml.optimizer import Optimizer
 from visualization.visual import Visual
@@ -27,7 +25,7 @@ def main():
         [0.02, 0.05, 0.08],
         [0.07, 0.09, 0.12]
     ]
-    shots = 200
+    shots = 1000
 
     input_circuit = Circuit(
         qubits=2,
@@ -70,7 +68,7 @@ def main():
         [0.15, 0.25, 0.35],
         [0.45, 0.55, 0.65]
     ]
-    max_iterations = 10  # Kurze Demo
+    max_iterations = 10000  # Kurze Demo
 
     # Für jeden Optimizer eine separate Instanz erstellen
     optimizer_instances = {}
@@ -104,6 +102,13 @@ def main():
 
             # Im Visual => record_probability
             visual.record_probability(opt_name, iteration, prob_tgt)
+
+            print(f"Iteration {iteration}, Wahrscheinlichkeit des Zielzustands: {prob_tgt * 100:.2f}%")
+
+            # Abbrechen, wenn die Wahrscheinlichkeit über 98% liegt
+            if prob_tgt >= 0.98:
+                print(f"Abbruch: Wahrscheinlichkeit des Zielzustands {prob_tgt * 100:.2f}% überschreitet 98%.")
+                break
 
             # Optimierung
             updated_matrix = my_optimizer.optimize(new_counts, current_training_matrix)
