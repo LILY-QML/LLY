@@ -128,9 +128,11 @@ class Optimizer:
         und legt eine TFOptimizerWrapper-Instanz an.
         """
         path_data_json = os.path.join(self.config_path, 'data.json')
+        print(f"DEBUG: Versuche, `data.json` von {path_data_json} zu laden")
         try:
             with open(path_data_json, 'r') as config_file:
                 self.data_json = json.load(config_file)
+            self.logger.info(f"`data.json` erfolgreich geladen: {self.data_json}")
         except Exception as e:
             self.logger.error(f"Failed to load data.json: {e}")
             return {"Error Code": 1112, "Message": "Data file not found."}
@@ -266,3 +268,64 @@ class Optimizer:
             r = f"(1:{qubits_measurement_count[i][1]}; 0:{qubits_measurement_count[i][0]})"
             results.append(r)
         return results
+
+class AdvancedOptimizer(Optimizer):
+    def __init__(self, config_path='var', advanced_mode=True, advanced_config=None):
+        if config_path is None:
+            raise ValueError("config_path darf nicht None sein.")
+        super().__init__(config_path)
+        self.advanced_mode = advanced_mode
+        self.advanced_config = advanced_config or {}
+        self.advanced_optimizer_wrapper = None
+
+    def start(self, optimizer_name, target_state):
+        """
+        Überschreibt die Startmethode, um ein erweitertes Optimierungsprinzip
+        einzuführen, falls `advanced_mode` aktiviert ist.
+        """
+        print(f"DEBUG: AdvancedOptimizer start() with advanced_mode={self.advanced_mode}")
+
+        # Wenn der erweiterte Modus aktiv ist, initialisiere einen alternativen Optimizer
+        if self.advanced_mode:
+            self.advanced_optimizer_wrapper = self._setup_advanced_optimizer(optimizer_name)
+            if isinstance(self.advanced_optimizer_wrapper, dict) and "Error Code" in self.advanced_optimizer_wrapper:
+                return self.advanced_optimizer_wrapper
+
+        # Rufe die Standardmethode der Basisklasse auf
+        return super().start(optimizer_name, target_state)
+
+    def _setup_advanced_optimizer(self, optimizer_name):
+        """
+        Erstellt eine spezielle Instanz für erweiterte Optimierungen.
+        """
+        print(f"DEBUG: Setting up advanced optimizer {optimizer_name}")
+
+        if optimizer_name not in _OPTIMIZER_MAPPING:
+            return {"Error Code": 1200, "Message": f"Advanced optimizer {optimizer_name} not found."}
+
+        keras_cls = _OPTIMIZER_MAPPING[optimizer_name]
+
+        # Verwenden der direkt übergebenen Konfiguration
+        advanced_cfg = self.advanced_config
+
+        try:
+            advanced_optimizer = keras_cls(**advanced_cfg)
+            return TFOptimizerWrapper(advanced_optimizer, [], self.target_state)
+        except TypeError as e:
+            self.logger.error(f"Error initializing advanced optimizer {optimizer_name}: {e}")
+            return {"Error Code": 1210, "Message": f"Error initializing advanced optimizer {optimizer_name}: {e}"}
+
+    def optimize(self, measurement, training_matrix):
+        """
+        Überschreibt die Optimierungsmethode, um das erweiterte Prinzip
+        einzuführen, falls `advanced_mode` aktiv ist.
+        """
+        if self.advanced_mode and self.advanced_optimizer_wrapper:
+            print("DEBUG: Using advanced optimization logic")
+            prob_target = self.advanced_optimizer_wrapper._prob_of_target(measurement, self.target_state)
+            print(f"Advanced Optimization: Probability of target = {prob_target:.4f}")
+            return super().optimize(measurement, training_matrix)
+        else:
+            # Fallback zur Standardlogik der Basisklasse
+            return super().optimize(measurement, training_matrix)
+

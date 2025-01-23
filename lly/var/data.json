@@ -5,6 +5,9 @@
       "momentum": 0.95,
       "beta_1": 0.9,
       "beta_2": 0.999
+    },
+    "advanced_optimizer_config": {
+        "learning_rate": 0.001,
+        "epsilon": 1e-7
     }
-  }
-  
+}
