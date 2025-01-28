@@ -1,17 +1,20 @@
-# example/dml/src/dml.py
-
 import json
 import os
 import logging
 import numpy as np
-from lly.ml.ml import ML  # Importiere die ML-Klasse
+import time
+from collections import defaultdict
+from lly.ml.ml import ML  
+from lly.visualization.visual import Visual
+from lly.core.thread import ThreadMonitor  # Importiere ThreadMonitor
+import threading  # Importiere threading, um threading.get_ident() zu verwenden
 
 class DML:
     def __init__(self, data_path):
         """
-        Initialisiert die DML-Klasse.
+        Initializes the DML class.
 
-        :param data_path: Pfad zur data.json Datei
+        :param data_path: Path to the data.json file
         """
         self.data_path = data_path
         self.activation_matrices = []
@@ -19,15 +22,25 @@ class DML:
         self.depth = 0
         self.logger = self.setup_logger()
         self.load_data()
-        self.check()  # Automatisches Ausführen der Überprüfung beim Erzeugen der Klasse
+        self.check()  # Automatically execute the check upon class instantiation
+        self.training_phases = None  # Initialisierung
+
+        # Initialize the Visual instance
+        self.visual = Visual()
+
+        # Initialize ThreadMonitor instance
+        self.thread_monitor = ThreadMonitor()
+
+        # Initialize Circuit as None
+        self.circuit = None
 
     def setup_logger(self):
         """
-        Einrichtung eines einfachen Loggers.
+        Sets up a simple logger.
         """
         logger = logging.getLogger('DMLLogger')
         logger.setLevel(logging.INFO)
-        # Verhindert doppelte Logs
+        # Prevent duplicate logs
         if not logger.handlers:
             ch = logging.StreamHandler()
             ch.setLevel(logging.INFO)
@@ -38,157 +51,139 @@ class DML:
 
     def load_data(self):
         """
-        Lädt die Aktivierungsmatrizen aus der JSON-Datei.
+        Loads activation matrices from the JSON file.
         """
         if not os.path.exists(self.data_path):
-            self.logger.error(f"Datei nicht gefunden: {self.data_path}")
+            self.logger.error(f"File not found: {self.data_path}")
             return
 
         with open(self.data_path, 'r') as file:
             try:
                 data = json.load(file)
                 self.activation_matrices = data.get("activation_matrices", [])
-                self.logger.info(f"{len(self.activation_matrices)} Aktivierungsmatrizen geladen.")
+                self.logger.info(f"{len(self.activation_matrices)} activation matrices loaded.")
             except json.JSONDecodeError as e:
-                self.logger.error(f"Fehler beim Parsen der JSON-Datei: {e}")
+                self.logger.error(f"Error parsing JSON file: {e}")
 
     def check(self):
         """
-        Führt die Überprüfungen auf den Aktivierungsmatrizen durch.
+        Performs checks on the activation matrices.
 
-        - Überprüft, ob alle Aktivierungsmatrizen gleich sind.
-        - Überprüft, ob die Anzahl der Spalten jeder Matrix durch 3 teilbar ist.
-        - Setzt die Werte für `qubits` und `depth`.
+        - Checks if all activation matrices are identical.
+        - Checks if the number of columns in each matrix is divisible by 3.
+        - Sets the values for `qubits` and `depth`.
 
-        :return: Dictionary mit Ergebnissen der Überprüfungen
+        :return: Dictionary with the results of the checks
         """
         if not self.activation_matrices:
-            self.logger.error("Keine Aktivierungsmatrizen zum Überprüfen.")
-            return {"status": "Fehler", "nachricht": "Keine Aktivierungsmatrizen vorhanden."}
+            self.logger.error("No activation matrices to check.")
+            return {"status": "Error", "message": "No activation matrices available."}
 
-        # Überprüfen, ob alle Matrizen gleich sind
+        # Check if all matrices are identical
         first_matrix = self.activation_matrices[0]["matrix"]
         all_equal = all(matrix["matrix"] == first_matrix for matrix in self.activation_matrices)
-        self.logger.info(f"Alle Matrizen gleich: {all_equal}")
+        self.logger.info(f"All matrices identical: {all_equal}")
 
-        # Überprüfen, ob die Anzahl der Spalten durch 3 teilbar ist
-        num_qubits = len(first_matrix)  # Anzahl der Reihen
+        # Check if the number of columns is divisible by 3
+        num_qubits = len(first_matrix)  # Number of rows
         for idx, matrix in enumerate(self.activation_matrices):
-            num_columns = len(matrix["matrix"][0])  # Anzahl der Spalten
+            num_columns = len(matrix["matrix"][0])  # Number of columns
             if num_columns % 3 != 0:
-                self.logger.warning(f"Matrize {idx} hat {num_columns} Spalten, die nicht durch 3 teilbar sind.")
+                self.logger.warning(f"Matrix {idx} has {num_columns} columns, not divisible by 3.")
                 return {
-                    "status": "Fehler",
-                    "nachricht": f"Matrize {idx} hat {num_columns} Spalten, die nicht durch 3 teilbar sind."
+                    "status": "Error",
+                    "message": f"Matrix {idx} has {num_columns} columns, not divisible by 3."
                 }
 
-        # Setzen der Werte für `qubits` und `depth`
-        self.qubits = num_qubits  # Anzahl der Reihen
-        self.depth = len(first_matrix[0]) // 3  # Anzahl der Spalten geteilt durch 3
+        # Set the values for `qubits` and `depth`
+        self.qubits = num_qubits  # Number of rows
+        self.depth = len(first_matrix[0]) // 3  # Number of columns divided by 3
 
-        self.logger.info(f"Qubits gesetzt auf: {self.qubits}")
-        self.logger.info(f"Depth gesetzt auf: {self.depth}")
+        self.logger.info(f"Qubits set to: {self.qubits}")
+        self.logger.info(f"Depth set to: {self.depth}")
 
         return {
-            "status": "Erfolg",
-            "alle_matrizen_gleich": all_equal,
+            "status": "Success",
+            "all_matrices_identical": all_equal,
             "qubits": self.qubits,
             "depth": self.depth
         }
 
     def create(self):
         """
-        Erstellt einen Circuit mit den gegebenen Parametern und einer randomisierten Trainings-Phasengatter-Matrix.
-
-        - Importiert Circuit aus lly.core.circuit
-        - Erstellt einen Circuit mit qubits und depth
-        - Setzt die Aktivierungsphasen auf die erste Aktivierungsmatrix
-        - Erstellt eine randomisierte Trainings-Phasengatter-Matrix (gleiche Dimensionen wie activation_phases)
-        - Führt den Circuit aus und gibt ihn zusammen mit der Trainings-Phasengatter-Matrix zurück
+        Creates a circuit with the given parameters and a randomized training phase gate matrix.
 
         :return: Tuple (Circuit, training_phases)
         """
         try:
             from lly.core.circuit import Circuit
         except ImportError as e:
-            self.logger.error(f"Fehler beim Importieren der Circuit-Klasse: {e}")
+            self.logger.error(f"Error importing Circuit class: {e}")
             return None, None
 
         if not self.activation_matrices:
-            self.logger.error("Keine Aktivierungsmatrizen zum Erstellen eines Circuit vorhanden.")
+            self.logger.error("No activation matrices available to create a Circuit.")
             return None, None
 
-        # Setze die Aktivierungsphasen auf die erste Aktivierungsmatrix
-        activation_phases = self.activation_matrices[0]["matrix"]  # qubits x (depth *3)
+        activation_phases = self.activation_matrices[0]["matrix"]
 
-        # Generiere eine randomisierte Trainings-Phasengatter-Matrix mit gleichen Dimensionen wie activation_phases
         training_phases = [
             [float(np.random.rand()) for _ in range(self.depth * 3)] for _ in range(self.qubits)
         ]
 
-        self.logger.info(f"Generierte Trainings-Phasengatter-Matrix: {training_phases}")
+        self.logger.info(f"Generated training phase gate matrix: {training_phases}")
 
-        # Erstelle einen Circuit mit qubits und depth
-        circuit = Circuit(
+        # Zuweisung der Trainingsphasen zur Instanzvariable
+        self.training_phases = training_phases
+
+        # Speicherung des Circuits als Attribut der Klasse
+        self.circuit = Circuit(
             qubits=self.qubits,
             depth=self.depth,
-            training_phases=training_phases,
+            training_phases=self.training_phases,
             activation_phases=activation_phases,
             shots=10000
         )
 
-        # Führe den Circuit aus
-        circuit.measure_all()
-        circuit.run()
-        counts = circuit.get_counts()
+        self.circuit.measure_all()
+        self.circuit.run()
+        counts = self.circuit.get_counts()
 
-        self.logger.info(f"Circuit ausgeführt. Messresultate: {counts}")
+        self.logger.info(f"Circuit executed. Measurement results: {counts}")
 
-        return circuit, training_phases
+        # Setze die Aktivierungsphasen separat
+        self.visual.set_activation_phases("Matrix1", activation_phases)
+
+        # Setze die initialen Verteilungen (counts)
+        self.visual.set_initial_distribution("Matrix1", counts)
+
+        self.visual.set_final_distribution("Matrix1", "InitialCircuit", counts)
+
+        return self.circuit, self.training_phases
 
     def optimize(self, optimizer, optimized_param, shots, iterations, end_value=None):
         """
-        Führt den Optimierungsprozess aus, um die Phasenmatrix basierend auf den Messungsergebnissen anzupassen.
-
-        :param optimizer: Typ des Optimierers (z.B. 'adam', 'sgd')
-        :type optimizer: str
-        :param optimized_param: Parameter für den Optimierer als Dictionary
-        :type optimized_param: dict
-        :param shots: Anzahl der Shots für die Simulation
-        :type shots: int
-        :param iterations: Maximale Anzahl an Iterationen für die Optimierung
-        :type iterations: int
-        :param end_value: Optionaler Schwellenwert für die Wahrscheinlichkeit des Zielzustands
-        :type end_value: float, optional
-        :return: None
+        Führt den Optimierungsprozess durch, um die Phasenmatrix basierend auf den Messresultaten anzupassen.
         """
         try:
             from lly.core.circuit import Circuit
         except ImportError as e:
-            self.logger.error(f"Fehler beim Importieren der Circuit-Klasse: {e}")
+            self.logger.error(f"Error importing Circuit class: {e}")
             return
 
         for idx, activation_matrix in enumerate(self.activation_matrices):
-            self.logger.info(f"Starte Optimierung für Matrize {idx} ({activation_matrix.get('name', 'Unbenannt')}).")
+            self.logger.info(f"Starting optimization for Matrix {idx} ({activation_matrix.get('name', 'Unnamed')}).")
 
-            target_state = activation_matrix.get('target_state', [1] * self.qubits)  # Standardziel: Alle Qubits auf 1
-            activation_phases = activation_matrix["matrix"]  # qubits x (depth *3)
+            target_state = activation_matrix.get('target_state', [1] * self.qubits)
+            activation_phases = activation_matrix["matrix"]
 
-            # Initiale Trainings-Phasengatter-Matrix
-            training_phases = [
-                [float(np.random.rand()) for _ in range(self.depth * 3)] for _ in range(self.qubits)
-            ]
+            # Sicherstellen, dass self.training_phases gesetzt ist
+            if self.training_phases is None:
+                self.logger.error("Training phases sind nicht gesetzt. Bitte führe zuerst die `create`-Methode aus.")
+                return
 
-            # Erstelle einen Circuit mit den aktuellen Phasen
-            circuit = Circuit(
-                qubits=self.qubits,
-                depth=self.depth,
-                training_phases=training_phases,
-                activation_phases=activation_phases,
-                shots=shots
-            )
+            training_phases = self.training_phases.copy()
 
-            # Initialisiere den Optimierer
             ml = ML(
                 qubits=self.qubits,
                 optimizer_type=optimizer,
@@ -196,59 +191,206 @@ class DML:
                 target_state=target_state
             )
 
-            for iteration in range(iterations):
-                self.logger.info(f"Iteration {iteration + 1}/{iterations} für Matrize {idx}.")
+            self.visual.set_initial_distribution(f"Matrix{idx}_Optimizer{optimizer}", self.circuit.get_counts())
 
-                # Führe den Circuit aus und erhalte Messresultate
-                circuit.measure_all()
-                circuit.run()
-                counts = circuit.get_counts()
+            thread_id = threading.get_ident()
+            self.thread_monitor.log_thread_start(thread_id, f"Optimization for Matrix {idx}")
 
-                # Berechne die Wahrscheinlichkeit des Zielzustands
-                target_key = ''.join(str(bit) for bit in target_state)
-                target_count = counts.get(target_key, 0)
-                total_counts = sum(counts.values())
-                probability = target_count / total_counts if total_counts > 0 else 0
-                self.logger.info(f"Wahrscheinlichkeit des Zielzustands {target_key}: {probability:.4f}")
+            try:
+                for iteration in range(iterations):
+                    self.logger.info(f"Iteration {iteration + 1}/{iterations} für Matrix {idx}.")
 
-                # Prüfe, ob der Schwellenwert erreicht wurde
-                if end_value is not None and probability >= end_value:
-                    self.logger.info(f"Schwellenwert erreicht: {probability:.4f} >= {end_value}")
-                    break
+                    # Verwenden des gespeicherten Circuit-Objekts
+                    self.circuit.measure_all()
+                    self.circuit.run()
+                    counts = self.circuit.get_counts()
 
-                # Führe die Optimierung für dieses Qubit durch
-                optimized_phases = ml.run(counts, training_phases)
+                    target_key = ''.join(str(bit) for bit in target_state)
+                    target_count = counts.get(target_key, 0)
+                    total_counts = sum(counts.values())
+                    probability = target_count / total_counts if total_counts > 0 else 0
+                    self.logger.info(f"Wahrscheinlichkeit des Zielzustands {target_key}: {probability:.4f}")
 
-                # Aktualisiere die Trainingsphasen
-                training_phases = optimized_phases
+                    loss = 1 - probability
+                    self.logger.info(f"Verlust: {loss:.4f}")
 
-                # Aktualisiere den Circuit mit den neuen Phasen
-                circuit = Circuit(
-                    qubits=self.qubits,
-                    depth=self.depth,
-                    training_phases=training_phases,
-                    activation_phases=activation_phases,
-                    shots=shots
-                )
+                    self.visual.record_probability(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", iteration + 1, probability)
+                    self.visual.record_loss(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", iteration + 1, loss)
 
-            # Speichere die optimierten Phasen zurück in die Aktivierungsmatrix
-            activation_matrix["training_phases"] = training_phases
+                    if end_value is not None and probability >= end_value:
+                        self.logger.info(f"Schwellenwert erreicht: {probability:.4f} >= {end_value}")
+                        break
 
-            self.logger.info(f"Optimierung abgeschlossen für Matrize {idx}.")
+                    optimized_phases = ml.run(counts, training_phases)
 
-        # Speichere die aktualisierten Daten zurück in die JSON-Datei
-        self.save_data()
+                    if optimized_phases is None:
+                        self.logger.error("Optimizer returned None. Abbruch der Optimierung.")
+                        break
 
-    def save_data(self):
+                    training_phases = optimized_phases
+
+                    self.logger.info(f"Iteration {iteration + 1}: Aktualisierte Trainingsphasen: {training_phases}")
+
+                    # Aktualisieren des gespeicherten Trainingsphases
+                    self.training_phases = training_phases
+
+                    # Aktualisieren des Circuits mit den neuen Trainingsphasen
+                    self.circuit = Circuit(
+                        qubits=self.qubits,
+                        depth=self.depth,
+                        training_phases=self.training_phases,
+                        activation_phases=activation_phases,
+                        shots=shots
+                    )
+            finally:
+                self.thread_monitor.log_thread_end(thread_id)
+
+            self.logger.info(f"Optimierung abgeschlossen für Matrix {idx}.")
+
+            self.circuit.measure_all()
+            self.circuit.run()
+            final_counts = self.circuit.get_counts()
+
+            self.visual.set_final_distribution(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", final_counts)
+
+            final_matrix = np.array(training_phases).reshape(self.qubits, self.depth, 3)
+            self.visual.record_heatmap_data(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", final_matrix)
+
+        self.visual.generate_pdf("ThreadActivityReport.pdf")
+
+    def measure(self, training_matrix, shots, activation_matrix):
         """
-        Speichert die aktuellen Aktivierungsmatrizen zurück in die JSON-Datei.
+        Measures the training matrix with the given activation matrix.
+
+        :param training_matrix: The training matrix to be measured
+        :type training_matrix: list[list[float]]
+        :param shots: Number of shots for the measurement
+        :type shots: int
+        :param activation_matrix: The activation matrix to be used for measurement
+        :type activation_matrix: list[list[float]]
+        :return: Measurement results as a dictionary
+        :rtype: dict
         """
-        data = {
-            "activation_matrices": self.activation_matrices
-        }
         try:
-            with open(self.data_path, 'w') as file:
-                json.dump(data, file, indent=4)
-            self.logger.info(f"Aktualisierte Daten erfolgreich in {self.data_path} gespeichert.")
+            from lly.core.circuit import Circuit
+        except ImportError as e:
+            self.logger.error(f"Error importing Circuit class: {e}")
+            return None
+
+        if len(training_matrix) != len(activation_matrix) or len(training_matrix[0]) != len(activation_matrix[0]):
+            self.logger.error("The dimensions of the training matrix and the activation matrix do not match.")
+            return None
+
+        self.logger.info(f"Starting measurement with {shots} shots.")
+        self.logger.info(f"Training matrix: {training_matrix}")
+        self.logger.info(f"Activation matrix: {activation_matrix}")
+
+        # Create the Circuit
+        self.circuit = Circuit(
+            qubits=self.qubits,
+            depth=self.depth,
+            training_phases=training_matrix,
+            activation_phases=activation_matrix,
+            shots=shots
+        )
+
+        self.circuit.measure_all()
+        self.circuit.run()
+
+        counts = self.circuit.get_counts()
+        self.logger.info(f"Measurement results: {counts}")
+
+        target_state = [1] * self.qubits  # Define your target state appropriately
+        target_key = ''.join(str(bit) for bit in target_state)
+        target_count = counts.get(target_key, 0)
+        total_counts = sum(counts.values())
+        probability = target_count / total_counts if total_counts > 0 else 0
+        loss = 1 - probability
+
+        self.visual.record_probability("Measurement", "Measurement", 1, probability)
+        self.visual.record_loss("Measurement", "Measurement", 1, loss)
+
+        # Record phase values (assuming phase values are part of the measurement)
+        for qubit_idx in range(self.qubits):
+            for depth_idx in range(self.depth * 3):
+                phase = training_matrix[qubit_idx][depth_idx]
+                self.visual.record_phase_value("Measurement", "Measurement", phase)
+
+        self.visual.set_final_distribution("Measurement", "Measurement", counts)
+
+        # Record heatmap data
+        final_matrix = np.array(training_matrix).reshape(self.qubits, self.depth, 3)
+        self.visual.record_heatmap_data("Measurement", "Measurement", final_matrix)
+
+        # Optionally, generate the PDF here if measurements are standalone
+        # self.visual.generate_pdf("00")
+
+        return counts
+
+    def save_training_matrix(self, training_matrix, folder_path):
+        """
+        Saves the current training matrix to a specified folder.
+
+        :param training_matrix: The training matrix to be saved
+        :type training_matrix: list[list[float]]
+        :param folder_path: The folder where the file will be saved
+        :type folder_path: str
+        """
+        import datetime
+        import json
+
+        # Ensure the folder exists
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        # Generate a unique filename with date and time
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_name = f"training_matrix_{timestamp}.json"
+        file_path = os.path.join(folder_path, file_name)
+
+        # Save the training matrix as a JSON file
+        try:
+            with open(file_path, 'w') as file:
+                json.dump(training_matrix, file, indent=4)
+            self.logger.info(f"Training matrix successfully saved at: {file_path}")
         except Exception as e:
-            self.logger.error(f"Fehler beim Speichern der Daten: {e}")
+            self.logger.error(f"Error saving training matrix: {e}")
+
+# ----------------------------------------------------------------------------
+# Beispielnutzung (optional, falls benötigt)
+# ----------------------------------------------------------------------------
+if __name__ == "__main__":
+    # Beispiel-Pfad zur data.json Datei
+    data_path = "example/dml/var/data.json"
+
+    # Erstelle eine DML-Instanz
+    dml = DML(data_path=data_path)
+
+    # Erstelle einen Circuit und Trainingsphasen
+    circuit, training_phases = dml.create()
+
+    if circuit is not None:
+        # Beispiel-Messdaten nach der Erstellung des Circuits
+        measurement = circuit.get_counts()
+
+        # Speichere die Trainingsmatrix
+        dml.save_training_matrix(training_phases, folder_path="example/dml/saved_matrices")
+
+        # Führe die Optimierung durch
+        dml.optimize(
+            optimizer='adam',
+            optimized_param={'learning_rate': 0.001},
+            shots=10000,
+            iterations=100,
+            end_value=0.99
+        )
+
+        # Führe eine zusätzliche Messung durch (optional)
+        # counts = dml.measure(training_matrix=training_phases, shots=10000, activation_matrix=dml.activation_matrices[0]["matrix"])
+
+    # Generiere einen PDF-Bericht der Thread-Aktivitäten (falls benötigt)
+    # dml.thread_monitor.generate_pdf_report()
+
+    # Optional: Ausgabe der Thread-Daten im Terminal
+    # print("\nCurrent Thread Activity Overview:")
+    # print(dml.thread_monitor)

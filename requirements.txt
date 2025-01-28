@@ -1,6 +1,8 @@
-matplotlib>=3.5.0
+qiskit>=0.39
+tensorflow>=2.6
+numpy>=1.19
+matplotlib>=3.4
 fpdf>=1.7.2
-numpy>=1.21.0
-tensorflow>=2.6.0
-qiskit>=0.41.0
-qiskit-aer>=0.10.0
+scipy>=1.5
+reportlab>=3.5
+unittest-xml-reporting>=3.0

@@ -9,6 +9,8 @@
 """
 This module contains the `Circuit` class, which encapsulates the logic for
 building and executing quantum circuits with customizable "pullback" qubits.
+It also includes the `ThreadMonitor` class for monitoring thread activities
+without disrupting the normal workflow.
 
 The workflow includes:
 1. Initializing a main circuit with a specified number of qubits and a certain
@@ -19,14 +21,130 @@ The workflow includes:
 4. Measuring qubits according to various modes (all, main-only, pullback-only,
    or a custom list of qubits).
 
-This file is tailored for usage with Sphinx documentation. Every function is
-documented using Sphinx-style docstrings, and there are extensive in-line
-comments to explain the code flow in detail.
+Additionally, the `ThreadMonitor` allows for logging thread activities and
+generating reports without interfering with the quantum circuit operations.
 """
 
+import threading
+import time
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from datetime import datetime
+import os
 from qiskit_aer import Aer
 from qiskit import QuantumCircuit, transpile
 import copy
+
+# ----------------------------------------------------------------------------
+# ThreadMonitor Klasse
+# ----------------------------------------------------------------------------
+
+class ThreadMonitor:
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        """
+        Singleton-Pattern, um sicherzustellen, dass nur eine Instanz des Monitors existiert.
+        """
+        if not cls._instance:
+            with cls._lock:
+                if not cls._instance:
+                    cls._instance = super(ThreadMonitor, cls).__new__(cls)
+                    cls._instance.thread_data = []
+                    cls._instance.lock = threading.Lock()
+        return cls._instance
+
+    def log_thread_start(self, thread_id, process_name):
+        """
+        Protokolliert den Start eines Threads.
+
+        :param thread_id: Die eindeutige ID des Threads.
+        :param process_name: Der Name des Prozesses (z. B. Optimierung eines Qubits).
+        """
+        start_time = time.time()
+        with self.lock:
+            self.thread_data.append({
+                "thread_id": thread_id,
+                "process_name": process_name,
+                "start_time": start_time,
+                "end_time": None,
+                "duration": None
+            })
+
+    def log_thread_end(self, thread_id):
+        """
+        Protokolliert das Ende eines Threads.
+
+        :param thread_id: Die eindeutige ID des Threads.
+        """
+        end_time = time.time()
+        with self.lock:
+            for entry in self.thread_data:
+                if entry["thread_id"] == thread_id and entry["end_time"] is None:
+                    entry["end_time"] = end_time
+                    entry["duration"] = end_time - entry["start_time"]
+                    break
+
+    def generate_pdf_report(self, folder="log", filename="Thread.pdf"):
+        """
+        Erstellt einen PDF-Bericht basierend auf den gesammelten Thread-Daten.
+
+        :param folder: Der Ordner, in dem die PDF gespeichert wird.
+        :param filename: Der Dateiname der generierten PDF-Datei.
+        """
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        filepath = os.path.join(folder, filename)
+        c = canvas.Canvas(filepath, pagesize=A4)
+        width, height = A4
+
+        # Titel
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(50, height - 50, "Thread Activity Report")
+        c.setFont("Helvetica", 12)
+        c.drawString(50, height - 70, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Tabelle mit Thread-Daten
+        c.drawString(50, height - 100, "Thread Overview:")
+        y = height - 120
+        c.setFont("Helvetica", 10)
+
+        headers = ["Thread ID", "Process Name", "Start Time", "End Time", "Duration (s)"]
+        c.drawString(50, y, " | ".join(headers))
+        y -= 20
+
+        for entry in self.thread_data:
+            start_time = time.strftime('%H:%M:%S', time.localtime(entry["start_time"]))
+            end_time = time.strftime('%H:%M:%S', time.localtime(entry["end_time"])) if entry["end_time"] else "N/A"
+            duration = f"{entry['duration']:.2f}" if entry["duration"] else "N/A"
+
+            line = f"{entry['thread_id']} | {entry['process_name']} | {start_time} | {end_time} | {duration}"
+            c.drawString(50, y, line)
+            y -= 15
+
+            if y < 50:  # Neue Seite bei Platzmangel
+                c.showPage()
+                y = height - 50
+
+        c.save()
+
+    def __str__(self):
+        """
+        Gibt eine Übersicht der gesammelten Thread-Daten als String zurück.
+        """
+        overview = ["Thread Overview:"]
+        for entry in self.thread_data:
+            overview.append(f"Thread ID: {entry['thread_id']}, Process: {entry['process_name']}, "
+                            f"Start: {time.strftime('%H:%M:%S', time.localtime(entry['start_time']))}, "
+                            f"End: {time.strftime('%H:%M:%S', time.localtime(entry['end_time'])) if entry['end_time'] else 'N/A'}, "
+                            f"Duration: {entry['duration']:.2f}s" if entry['duration'] else "N/A")
+        return "\n".join(overview)
+
+# ----------------------------------------------------------------------------
+# Circuit Klasse
+# ----------------------------------------------------------------------------
 
 class Circuit:
     """
@@ -97,6 +215,9 @@ class Circuit:
         # training and activation phase matrices.
         self.initialize_gates()
 
+        # Initialize ThreadMonitor instance
+        self.thread_monitor = ThreadMonitor()
+
     def initialize_gates(self):
         """
         Initializes the gates of the circuit based on the training and
@@ -139,40 +260,30 @@ class Circuit:
 
     def apply_l_gate(self, qubit, depth_index):
         """
-        Applies the L-gate sequence for a single qubit and a specific depth index.
-
-        The L-gate is composed of three phases:
-        1. Training phase (TP)
-        2. Activation phase (AP)
-        3. Potentially repeated with a Hadamard gate in between.
-
-        :param qubit: The index of the qubit to apply the gate on.
+        Applies an L-gate sequence using the training and activation phases.
+        The combination of gates is adjusted to achieve the sequence
+        Phase-Phase-Hadamard-Phase-Phase-Hadamard-Phase-Phase.
+        
+        :param qubit: The index of the qubit to which the gate is applied.
         :type qubit: int
-        :param depth_index: An integer indicating which depth layer is being
-            processed (0-based).
+        :param depth_index: The current depth index of the circuit (0-based).
         :type depth_index: int
         """
-        # Each L-gate consists of 3 sub-steps per depth layer
+        # Each L-gate consists of three substeps
         for i in range(3):
-            # The index in the phase matrix is computed by multiplying
-            # the depth index by 3, then adding `i`.
+            # Calculate the index within the phase matrices
             index = depth_index * 3 + i
 
-            # Retrieve the training phase and activation phase for this
-            # qubit and sub-step.
+            # Retrieve training and activation phases
             tp_phase = self.training_phases[qubit][index]
             ap_phase = self.activation_phases[qubit][index]
 
-            # Apply the training phase as a phase gate.
+            # Apply Training Phase as a P-Gate
             self.circuit.p(tp_phase, qubit)
-
-            # Apply the activation phase as a phase gate.
             self.circuit.p(ap_phase, qubit)
 
-            # Insert a Hadamard gate after certain sub-phases. In this
-            # design, we do it for i == 1 and i == 2, to match the
-            # original pattern.
-            if i == 1 or i == 2:
+            # Apply Hadamard gate only after the first two phase pairs
+            if i < 2:
                 self.circuit.h(qubit)
 
     def remove_measurements(self, qc):
@@ -214,16 +325,24 @@ class Circuit:
             probabilities, etc.
         :rtype: qiskit.result.Result
         """
-        # Get the requested backend from the Aer provider
-        simulator = Aer.get_backend(self.aer_backend)
+        # Log thread start
+        thread_id = threading.get_ident()
+        self.thread_monitor.log_thread_start(thread_id, "Circuit Simulation Run")
 
-        # Transpile the circuit for the specific simulator
-        compiled_circuit = transpile(self.circuit, simulator)
+        try:
+            # Get the requested backend from the Aer provider
+            simulator = Aer.get_backend(self.aer_backend)
 
-        # Execute the compiled circuit with the specified number of shots
-        self.simulation_result = simulator.run(compiled_circuit, shots=self.shots).result()
+            # Transpile the circuit for the specific simulator
+            compiled_circuit = transpile(self.circuit, simulator)
 
-        return self.simulation_result
+            # Execute the compiled circuit with the specified number of shots
+            self.simulation_result = simulator.run(compiled_circuit, shots=self.shots).result()
+
+            return self.simulation_result
+        finally:
+            # Log thread end
+            self.thread_monitor.log_thread_end(thread_id)
 
     def get_counts(self):
         """
@@ -246,27 +365,26 @@ class Circuit:
         A helper method that measures all qubits in the current circuit.
 
         This method adds (or reuses) a classical register of size 
-        ``self.circuit.num_qubits`` and measures each quantum bit 
+        `self.circuit.num_qubits` and measures each quantum bit 
         into the corresponding classical bit.
         """
         from qiskit import ClassicalRegister
 
         n = self.circuit.num_qubits
         if not self.circuit.cregs:
-            # Noch kein klassisches Register -> neues anlegen
+            # Noch kein klassisches Register -> Neues anlegen
             c_reg = ClassicalRegister(n, "c0")
             self.circuit.add_register(c_reg)
         else:
-            # Bereits ein klassisches Register vorhanden, wir nehmen das letzte
-            c_reg = self.circuit.cregs[-1]
-            # Optional: prüfen, ob es genügend Bits hat
-            if c_reg.size < n:
-                raise ValueError("Existing classical register is too small for measure_all.")
+            # Prüfen, ob das existierende Register groß genug ist
+            existing_size = sum(creg.size for creg in self.circuit.cregs)
+            if existing_size < n:
+                # Neues größeres Register hinzufügen
+                new_c_reg = ClassicalRegister(n - existing_size, f"c{len(self.circuit.cregs)}")
+                self.circuit.add_register(new_c_reg)
 
-        # Nun alle Qubits in die gleichnamigen klassischen Bits messen
+        # Messen aller Qubits
         self.circuit.measure(range(n), range(n))
-
-
 
     def copy(self):
         """
@@ -447,7 +565,7 @@ class Circuit:
             new_circuit.measure(range(old_qubits), range(old_qubits))
 
         elif measure_mode == "pullback":
-            # Measure only the new (pullback) qubits [old_qubits..old_qubits+r_pullback-1]
+            # Measure only the new (pullback) qubits [old_qubits..old_qubits+p_pull-1]
             new_circuit.measure(
                 range(old_qubits, old_qubits + pullback_qubits),
                 range(pullback_qubits)
@@ -467,11 +585,14 @@ class Circuit:
         # Reset any previous simulation result, because the circuit changed
         self.simulation_result = None
 
+# ----------------------------------------------------------------------------
+# Beispielnutzung (wenn diese Datei als Skript ausgeführt wird)
+# ----------------------------------------------------------------------------
 
-# ----------------------------------------------------------------------------
-# Example usage (if this file is run as a script)
-# ----------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Initialisiere ThreadMonitor
+    thread_monitor = ThreadMonitor()
+
     # Training and activation phases for a 2-qubit main circuit with depth=2
     # => each qubit has 2 * 3 = 6 phase values
     training_phases = [
@@ -484,7 +605,7 @@ if __name__ == "__main__":
         [1.2, 1.1, 1.0, 0.9, 0.8, 0.7]   # Phases for qubit 1
     ]
 
-    # Create a Circuit instance with 2 main qubits, depth=2, and the above phases
+    # Erstelle eine Circuit-Instanz mit 2 Hauptqubits, Tiefe=2 und den obigen Phasen
     circuit = Circuit(
         qubits=2,
         depth=2,
@@ -496,22 +617,44 @@ if __name__ == "__main__":
     print("Initial main circuit (2 qubits, no measurement yet):")
     print(circuit)
 
-    # Now we apply the pullback with 2 additional qubits, specifying
-    # a 5-element tuple for `reductions`:
-    # (r_main, r_pull, phase1, phase2, phase3)
-    # In this example, we are entangling 2 main qubits with 2 pullback qubits,
-    # and applying three phase gates (0.15, 0.22, 0.33) on each pullback qubit
-    # before the CNOT.
-    circuit.apply_pullback(
-        pullback_qubits=2,
-        reductions=(2, 2, 0.15, 0.22, 0.33),
-        measure_mode="all"  # measure all qubits at the end
-    )
+    # Wende den Pullback mit 2 zusätzlichen Qubits an und logge die Aktivität
+    def apply_pullback_thread(circuit_instance):
+        # Logge den Start des Threads
+        thread_id = threading.get_ident()
+        thread_monitor.log_thread_start(thread_id, "Apply Pullback")
 
-    print("\nExtended circuit (4 qubits total, measurement at the end):")
-    print(circuit)
+        try:
+            # Spezifiziere die 5-Elemente-Tupel für `reductions`:
+            # (r_main, r_pull, phase1, phase2, phase3)
+            reductions = (2, 2, 0.15, 0.22, 0.33)
 
-    # Finally, run the simulation
+            # Entfalte den Pullback
+            circuit_instance.apply_pullback(
+                pullback_qubits=2,
+                reductions=reductions,
+                measure_mode="all"  # Messe alle Quantenbits am Ende
+            )
+            print("\nExtended circuit (4 qubits total, measurement at the end):")
+            print(circuit_instance)
+        finally:
+            # Logge das Ende des Threads
+            thread_monitor.log_thread_end(thread_id)
+
+    # Starte einen neuen Thread, um den Pullback anzuwenden
+    pullback_thread = threading.Thread(target=apply_pullback_thread, args=(circuit,))
+    pullback_thread.start()
+    pullback_thread.join()
+
+    # Führe die Simulation aus
     result = circuit.run()
     print("\nMeasurement results:")
     print(circuit.get_counts())
+
+    # Generiere einen PDF-Bericht der Thread-Aktivitäten
+    thread_monitor.generate_pdf_report()
+
+    print("\nThread Activity Report generated as 'log/Thread.pdf'.")
+
+    # Optional: Ausgabe der Thread-Daten im Terminal
+    print("\nCurrent Thread Activity Overview:")
+    print(thread_monitor)

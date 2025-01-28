@@ -3,7 +3,6 @@
 import os
 import sys
 import threading  # Importiere threading, um den Hauptthread zu identifizieren
-import argparse    # Importiere argparse für Kommandozeilenargumente
 
 # Füge den Pfad zum Hauptverzeichnis hinzu, damit die `lly`-Module gefunden werden können
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,110 +22,7 @@ except ModuleNotFoundError as e:
     print(f"ImportError: {e}")
     sys.exit(1)
 
-def run_test_mode():
-    """
-    Führt den Testmodus aus, um sicherzustellen, dass die wesentlichen Funktionen korrekt arbeiten.
-    """
-    print("\n=== Testmodus aktiviert ===\n")
-    
-    # Initialisiere eine DML-Instanz mit einem Testdatenpfad oder Mock-Daten
-    test_data_path = os.path.join(current_dir, 'var', 'test_data.json')
-    
-    # Erstelle eine Test-dml.json Datei, falls sie nicht existiert
-    if not os.path.exists(test_data_path):
-        test_data = {
-            "activation_matrices": [
-                {
-                    "name": "TestMatrix1",
-                    "matrix": [
-                        [0.1, 0.2, 0.3],
-                        [0.4, 0.5, 0.6]
-                    ],
-                    "target_state": [1, 0]
-                }
-            ]
-        }
-        os.makedirs(os.path.dirname(test_data_path), exist_ok=True)
-        with open(test_data_path, 'w') as f:
-            import json
-            json.dump(test_data, f, indent=4)
-        print(f"Erstellte Testdaten unter {test_data_path}")
-    
-    # Initialisiere die DML-Klasse mit den Testdaten
-    dml = DML(data_path=test_data_path)
-    
-    # Test 1: Überprüfe, ob die Daten korrekt geladen wurden
-    if not dml.activation_matrices:
-        print("Fehler: Aktivierungsmatrizen wurden nicht korrekt geladen.")
-        return
-    else:
-        print("Test 1 bestanden: Aktivierungsmatrizen wurden korrekt geladen.")
-    
-    # Test 2: Erstelle einen Circuit und überprüfe die Trainingsphasen
-    circuit, training_phases = dml.create()
-    if circuit is None or training_phases is None:
-        print("Fehler: Circuit konnte nicht erstellt werden.")
-        return
-    else:
-        print("Test 2 bestanden: Circuit wurde erfolgreich erstellt.")
-    
-    # Test 3: Führe eine Messung durch und überprüfe die Ergebnisse
-    measurement_results = dml.measure(training_matrix=training_phases, shots=100, activation_matrix=dml.activation_matrices[0]["matrix"])
-    if not measurement_results:
-        print("Fehler: Messung hat keine Ergebnisse geliefert.")
-        return
-    else:
-        print("Test 3 bestanden: Messung wurde erfolgreich durchgeführt.")
-    
-    # Test 4: Speichere die Trainingsmatrix und überprüfe die Datei
-    test_save_folder = os.path.join(current_dir, 'test_saved_matrices')
-    dml.save_training_matrix(training_matrix=training_phases, folder_path=test_save_folder)
-    saved_files = os.listdir(test_save_folder)
-    if not saved_files:
-        print("Fehler: Trainingsmatrix wurde nicht gespeichert.")
-        return
-    else:
-        print(f"Test 4 bestanden: Trainingsmatrix wurde erfolgreich in '{test_save_folder}' gespeichert.")
-    
-    # Test 5: Führe eine Optimierung mit reduzierten Parametern durch
-    print("\nStarte eine schnelle Optimierung für Testzwecke...")
-    dml.optimize(
-        optimizer='adam',
-        optimized_param={'learning_rate': 0.001},
-        shots=1000,         # Reduzierte Anzahl der Shots
-        iterations=10000,     # Reduzierte Anzahl der Iterationen
-        end_value=0.95    # Niedrigerer Schwellenwert
-    )
-    print("Test 5 abgeschlossen: Optimierung durchgeführt.")
-    
-    # Test 6: Generiere eine PDF und überprüfe deren Existenz
-    pdf_report = dml.visual.pdf_filename
-    if os.path.exists(pdf_report):
-        print(f"Test 6 bestanden: PDF-Bericht '{pdf_report}' wurde erfolgreich erstellt.")
-    else:
-        print("Fehler: PDF-Bericht wurde nicht erstellt.")
-    
-    # Cleanup: Entferne die Testdaten und gespeicherten Matrizen
-    try:
-        os.remove(test_data_path)
-        import shutil
-        shutil.rmtree(test_save_folder)
-        print("\nBereinigung abgeschlossen: Testdaten und temporäre Dateien wurden entfernt.")
-    except Exception as e:
-        print(f"Warnung: Fehler bei der Bereinigung der Testdaten: {e}")
-    
-    print("\n=== Testmodus abgeschlossen ===\n")
-
 def main():
-    # Parse Kommandozeilenargumente
-    parser = argparse.ArgumentParser(description="DML Hauptprogramm mit optionalem Testmodus.")
-    parser.add_argument('-t', '--test', action='store_true', help='Führe das Programm im Testmodus aus.')
-    args = parser.parse_args()
-    
-    if args.test:
-        run_test_mode()
-        sys.exit(0)  # Beende das Programm nach dem Testmodus
-    
     # Initialisiere den ThreadMonitor
     thread_monitor = ThreadMonitor()
     
@@ -146,9 +42,12 @@ def main():
         # Erstelle den Circuit und die Trainings-Phasengatter-Matrix
         circuit, training_phases_matrix = dml.create()
     
+        # Setze die Trainingsphasen in der DML-Instanz
+        dml.training_phases = training_phases_matrix  # **Wichtig: Setze die Trainingsphasen**
+    
         if circuit is None:
             print("Fehler beim Erstellen des Circuit.")
-            sys.exit(1)
+            return
     
         # Ausgabe des Circuit
         print("\nErstellter Circuit:")
@@ -181,8 +80,8 @@ def main():
         # Führe die Optimierung durch
         optimizer_type = 'adam'  # Beispiel: 'adam'
         optimizer_params = {'learning_rate': 0.001}  # Beispiel-Parameter für Adam
-        shots = 1000
-        iterations = 10000
+        shots = 1000  # Anzahl der Shots für die Optimierung (angepasst von 10 auf 1000)
+        iterations = 10
         end_value = 0.95  # Optionaler Schwellenwert
     
         print("\nStarte Optimierungsprozess...")
@@ -198,9 +97,12 @@ def main():
         dml.load_data()
         circuit, training_phases_matrix = dml.create()
     
+        # Setze die optimierten Trainingsphasen in der DML-Instanz
+        dml.training_phases = training_phases_matrix  # **Wichtig: Setze die optimierten Trainingsphasen**
+    
         if circuit is None:
             print("Fehler beim Erstellen des Circuit nach der Optimierung.")
-            sys.exit(1)
+            return
     
         # Ausgabe des optimierten Circuit
         print("\nOptimierter Circuit:")

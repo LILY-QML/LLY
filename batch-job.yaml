@@ -1,0 +1,30 @@
+taskGroups:
+- taskSpec:
+    runnables:
+    - script:
+        text: |
+          # Install Python and dependencies
+          apt-get update && apt-get install -y python3 python3-pip unzip
+          
+          # Download and extract the repository
+          gsutil cp gs://sorage_lly_model/repo.zip .
+          unzip repo.zip -d repo
+          
+          # Navigate to the example/dml directory and run the script
+          cd repo/example/dml
+          pip3 install -r ../../requirements.txt
+          python3 main.py
+    computeResource:
+      cpuMilli: 2000      # 2 CPUs
+      memoryMib: 4096     # 4 GB RAM
+    maxRetryCount: 1
+  taskCount: 1
+  parallelism: 1
+allocationPolicy:
+  instances:
+  - policy:
+      machineType: e2-standard-2
+logsPolicy:
+  destination: CLOUD_LOGGING
+
+
