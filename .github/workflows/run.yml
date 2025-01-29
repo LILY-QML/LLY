@@ -1,7 +1,7 @@
-flname: Run DML on Server
+name: Run DML on Server
 
 on:
-  workflow_dispatch: # Ermöglicht das manuelle Starten des Workflows
+  workflow_dispatch: # Ermöglicht das manuelle Starten
 
 jobs:
   run-on-server:
@@ -13,26 +13,25 @@ jobs:
       - name: Install SSH Client
         run: sudo apt-get install -y openssh-client
 
-      - name: Run Script on Server
-        env:
-          EXEC_SERVER: ${{ secrets.EXEC_SERVER }}
-          EXEC_W: ${{ secrets.EXEC_W }}
+      - name: Setup SSH Key
         run: |
-          sshpass -p "$EXEC_W" ssh -o StrictHostKeyChecking=no root@$EXEC_SERVER << 'EOF'
-            # Lösche ggf. alte Version
+          echo "${{ secrets.EXEC_SSH_KEY }}" > private_key
+          chmod 600 private_key
+          ssh-keyscan -H ${{ secrets.EXEC_SERVER }} >> ~/.ssh/known_hosts
+
+      - name: Run Script on Server
+        run: |
+          ssh -i private_key root@${{ secrets.EXEC_SERVER }} << 'EOF'
+            # Lösche alte Version und klone erneut
             rm -rf LLY
-            
-            # Klone das Repository erneut
             git clone https://github.com/${{ github.repository }}.git LLY
-            
-            # Wechsel in das Verzeichnis und führe das Python-Skript aus
             cd LLY/example/dml
             python3 main.py
           EOF
 
       - name: Fetch generated files
         run: |
-          sshpass -p "${{ secrets.EXEC_W }}" scp -o StrictHostKeyChecking=no -r root@${{ secrets.EXEC_SERVER }}:/root/LLY/example/dml/* ./generated_files
+          scp -i private_key -r root@${{ secrets.EXEC_SERVER }}:/root/LLY/example/dml/* ./generated_files
 
       - name: Upload generated files as artifacts
         uses: actions/upload-artifact@v4
