@@ -1,0 +1,13 @@
+2025-01-29 21:09:38,683 - DEBUG - Aktuelle sys.path:
+2025-01-29 21:09:38,683 - DEBUG - /home/dev/LLY
+2025-01-29 21:09:38,683 - DEBUG - /home/dev/LLY/example/dml
+2025-01-29 21:09:38,683 - DEBUG - /usr/lib/python311.zip
+2025-01-29 21:09:38,683 - DEBUG - /usr/lib/python3.11
+2025-01-29 21:09:38,683 - DEBUG - /usr/lib/python3.11/lib-dynload
+2025-01-29 21:09:38,683 - DEBUG - /usr/local/lib/python3.11/dist-packages
+2025-01-29 21:09:38,683 - DEBUG - /usr/lib/python3/dist-packages
+2025-01-29 21:09:41,109 - INFO - === Testmodus aktiviert ===
+2025-01-29 21:09:41,109 - INFO - Test 1 bestanden: Aktivierungsmatrizen wurden korrekt geladen.
+2025-01-29 21:09:41,572 - INFO - Test 2 bestanden: Circuit wurde erfolgreich erstellt.
+2025-01-29 21:09:41,644 - INFO - Test 3 bestanden: Messung wurde erfolgreich durchgeführt.
+2025-01-29 21:09:41,644 - INFO - Test 4 bestanden: Trainingsmatrix wurde erfolgreich in '/home/dev/LLY/example/dml/test_saved_matrices' gespeichert.

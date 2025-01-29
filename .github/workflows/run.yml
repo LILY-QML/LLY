@@ -1,39 +1,41 @@
-name: Run Circuit Simulation and Upload PDF
+flname: Run DML on Server
 
 on:
-  push:
-    branches:
-      - main  # Passe den Branch an, wenn nötig
+  workflow_dispatch: # Ermöglicht das manuelle Starten des Workflows
 
 jobs:
-  run-simulation:
+  run-on-server:
     runs-on: ubuntu-latest
-
     steps:
-      # Checkout des Repositories
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Python einrichten
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"  # Passe die Python-Version an deine Anforderungen an
+      - name: Install SSH Client
+        run: sudo apt-get install -y openssh-client
 
-      # Installiere Abhängigkeiten
-      - name: Install Dependencies
+      - name: Run Script on Server
+        env:
+          EXEC_SERVER: ${{ secrets.EXEC_SERVER }}
+          EXEC_W: ${{ secrets.EXEC_W }}
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt  # Stelle sicher, dass requirements.txt vorhanden ist
+          sshpass -p "$EXEC_W" ssh -o StrictHostKeyChecking=no root@$EXEC_SERVER << 'EOF'
+            # Lösche ggf. alte Version
+            rm -rf LLY
+            
+            # Klone das Repository erneut
+            git clone https://github.com/${{ github.repository }}.git LLY
+            
+            # Wechsel in das Verzeichnis und führe das Python-Skript aus
+            cd LLY/example/dml
+            python3 main.py
+          EOF
 
-      # Simulation ausführen
-      - name: Run Circuit Simulation
-        run: python lly/global.py  # Pfad zu deinem Skript anpassen
+      - name: Fetch generated files
+        run: |
+          sshpass -p "${{ secrets.EXEC_W }}" scp -o StrictHostKeyChecking=no -r root@${{ secrets.EXEC_SERVER }}:/root/LLY/example/dml/* ./generated_files
 
-      # PDF als Artefakt hochladen
-      - name: Upload PDF Artifact
-        uses: actions/upload-artifact@v3
+      - name: Upload generated files as artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: simulation-output
-          path: |
-            output.pdf  # Passe den Dateinamen und Pfad an, falls nötig
+          name: dml-output
+          path: generated_files/

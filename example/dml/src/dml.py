@@ -34,6 +34,11 @@ class DML:
         # Initialize Circuit as None
         self.circuit = None
 
+        # Puffer für Trainings-Log-Daten, um sie am Ende speichern zu können
+        self.training_log_data = {
+            "training_runs": []
+        }
+
     def setup_logger(self):
         """
         Sets up a simple logger.
@@ -164,6 +169,7 @@ class DML:
     def optimize(self, optimizer, optimized_param, shots, iterations, end_value=None):
         """
         Führt den Optimierungsprozess durch, um die Phasenmatrix basierend auf den Messresultaten anzupassen.
+        Zusätzlich werden alle relevanten Daten in einer 'training.json' unter 'log/' abgelegt.
         """
         try:
             from lly.core.circuit import Circuit
@@ -171,8 +177,24 @@ class DML:
             self.logger.error(f"Error importing Circuit class: {e}")
             return
 
+        # Lokale Liste für Einträge: Pro "Matrix" ein Ergebnisblock
+        training_runs_for_all_matrices = []
+
         for idx, activation_matrix in enumerate(self.activation_matrices):
-            self.logger.info(f"Starting optimization for Matrix {idx} ({activation_matrix.get('name', 'Unnamed')}).")
+            matrix_name = activation_matrix.get('name', f'Unnamed_{idx}')
+            self.logger.info(f"Starting optimization for Matrix {idx} ({matrix_name}).")
+
+            # Datenspeicher für diese eine Matrix
+            run_data = {
+                "matrix_index": idx,
+                "matrix_name": matrix_name,
+                "optimizer_type": optimizer,
+                "optimizer_params": optimized_param,
+                "shots": shots,
+                "iterations_data": [],
+                "final_counts": None,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
 
             target_state = activation_matrix.get('target_state', [1] * self.qubits)
             activation_phases = activation_matrix["matrix"]
@@ -191,7 +213,10 @@ class DML:
                 target_state=target_state
             )
 
-            self.visual.set_initial_distribution(f"Matrix{idx}_Optimizer{optimizer}", self.circuit.get_counts())
+            self.visual.set_initial_distribution(
+                f"Matrix{idx}_Optimizer{optimizer}",
+                self.circuit.get_counts()
+            )
 
             thread_id = threading.get_ident()
             self.thread_monitor.log_thread_start(thread_id, f"Optimization for Matrix {idx}")
@@ -200,7 +225,7 @@ class DML:
                 for iteration in range(iterations):
                     self.logger.info(f"Iteration {iteration + 1}/{iterations} für Matrix {idx}.")
 
-                    # Verwenden des gespeicherten Circuit-Objekts
+                    # Circuit ausführen mit aktuellem training_phases
                     self.circuit.measure_all()
                     self.circuit.run()
                     counts = self.circuit.get_counts()
@@ -209,11 +234,23 @@ class DML:
                     target_count = counts.get(target_key, 0)
                     total_counts = sum(counts.values())
                     probability = target_count / total_counts if total_counts > 0 else 0
-                    self.logger.info(f"Wahrscheinlichkeit des Zielzustands {target_key}: {probability:.4f}")
-
                     loss = 1 - probability
+
+                    self.logger.info(f"Wahrscheinlichkeit des Zielzustands {target_key}: {probability:.4f}")
                     self.logger.info(f"Verlust: {loss:.4f}")
 
+                    # Daten für training.json sammeln:
+                    iteration_data = {
+                        "iteration": iteration + 1,
+                        "probability": probability,
+                        "loss": loss,
+                        # Achtung: training_phases kann sehr groß sein
+                        # Hier speichern wir sie – ggf. kannst du sie weglassen oder nur "final" speichern
+                        "training_phases": training_phases
+                    }
+                    run_data["iterations_data"].append(iteration_data)
+
+                    # Visualisierung
                     self.visual.record_probability(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", iteration + 1, probability)
                     self.visual.record_loss(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", iteration + 1, loss)
 
@@ -221,20 +258,16 @@ class DML:
                         self.logger.info(f"Schwellenwert erreicht: {probability:.4f} >= {end_value}")
                         break
 
+                    # Aufruf des Optimizer
                     optimized_phases = ml.run(counts, training_phases)
-
                     if optimized_phases is None:
                         self.logger.error("Optimizer returned None. Abbruch der Optimierung.")
                         break
 
                     training_phases = optimized_phases
+                    self.training_phases = training_phases  # Update in der Instanz
 
-                    self.logger.info(f"Iteration {iteration + 1}: Aktualisierte Trainingsphasen: {training_phases}")
-
-                    # Aktualisieren des gespeicherten Trainingsphases
-                    self.training_phases = training_phases
-
-                    # Aktualisieren des Circuits mit den neuen Trainingsphasen
+                    # Circuit neu erstellen/aktualisieren
                     self.circuit = Circuit(
                         qubits=self.qubits,
                         depth=self.depth,
@@ -247,16 +280,62 @@ class DML:
 
             self.logger.info(f"Optimierung abgeschlossen für Matrix {idx}.")
 
+            # Finalen Circuit ausführen, final_counts holen
             self.circuit.measure_all()
             self.circuit.run()
             final_counts = self.circuit.get_counts()
 
-            self.visual.set_final_distribution(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", final_counts)
+            # In run_data eintragen
+            run_data["final_counts"] = final_counts
 
+            self.visual.set_final_distribution(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", final_counts)
             final_matrix = np.array(training_phases).reshape(self.qubits, self.depth, 3)
             self.visual.record_heatmap_data(f"Matrix{idx}_Optimizer{optimizer}", "Optimizer", final_matrix)
 
+            training_runs_for_all_matrices.append(run_data)
+
+        # PDF erzeugen (falls die PDF-Generierung klappt)
         self.visual.generate_pdf("ThreadActivityReport.pdf")
+
+        # ---------------------------------------------------------------
+        # Nach Durchlauf aller Matrizen: Daten in training.json speichern
+        # ---------------------------------------------------------------
+        self.save_training_run_to_json(training_runs_for_all_matrices)
+
+    def save_training_run_to_json(self, training_runs_for_all_matrices):
+        """
+        Hängt die neuen Trainingsdaten an eine training.json im log/ Verzeichnis an.
+        Existiert die Datei nicht, wird sie neu angelegt.
+        """
+        # Lokaler Pfad: log/training.json
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'log')
+        os.makedirs(log_dir, exist_ok=True)
+        training_json_path = os.path.join(log_dir, 'training.json')
+
+        # Alte Einträge einlesen (falls vorhanden)
+        if os.path.exists(training_json_path):
+            try:
+                with open(training_json_path, 'r') as f:
+                    existing_data = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                existing_data = {}
+        else:
+            existing_data = {}
+
+        # Struktur anlegen, falls nicht vorhanden
+        if "training_runs" not in existing_data:
+            existing_data["training_runs"] = []
+
+        # Neue Runs anhängen
+        existing_data["training_runs"].extend(training_runs_for_all_matrices)
+
+        # Nun in training.json abspeichern
+        try:
+            with open(training_json_path, 'w') as f:
+                json.dump(existing_data, f, indent=4)
+            self.logger.info(f"Training-Daten erfolgreich in '{training_json_path}' gespeichert.")
+        except Exception as e:
+            self.logger.error(f"Fehler beim Speichern in training.json: {e}")
 
     def measure(self, training_matrix, shots, activation_matrix):
         """
@@ -322,9 +401,6 @@ class DML:
         final_matrix = np.array(training_matrix).reshape(self.qubits, self.depth, 3)
         self.visual.record_heatmap_data("Measurement", "Measurement", final_matrix)
 
-        # Optionally, generate the PDF here if measurements are standalone
-        # self.visual.generate_pdf("00")
-
         return counts
 
     def save_training_matrix(self, training_matrix, folder_path):
@@ -357,7 +433,7 @@ class DML:
             self.logger.error(f"Error saving training matrix: {e}")
 
 # ----------------------------------------------------------------------------
-# Beispielnutzung (optional, falls benötigt)
+# Beispielnutzung (optional)
 # ----------------------------------------------------------------------------
 if __name__ == "__main__":
     # Beispiel-Pfad zur data.json Datei
@@ -386,7 +462,11 @@ if __name__ == "__main__":
         )
 
         # Führe eine zusätzliche Messung durch (optional)
-        # counts = dml.measure(training_matrix=training_phases, shots=10000, activation_matrix=dml.activation_matrices[0]["matrix"])
+        # counts = dml.measure(
+        #     training_matrix=training_phases,
+        #     shots=10000,
+        #     activation_matrix=dml.activation_matrices[0]["matrix"]
+        # )
 
     # Generiere einen PDF-Bericht der Thread-Aktivitäten (falls benötigt)
     # dml.thread_monitor.generate_pdf_report()
