@@ -10,19 +10,16 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install SSH Client
-        run: sudo apt-get install -y openssh-client
-
-      - name: Setup SSH Key
-        run: |
-          echo "${{ secrets.EXEC_SSH_KEY }}" > private_key
-          chmod 600 private_key
-          ssh-keyscan -H ${{ secrets.EXEC_SERVER }} >> ~/.ssh/known_hosts
+      - name: Install SSH Client & sshpass
+        run: sudo apt-get install -y openssh-client sshpass
 
       - name: Run Script on Server
+        env:
+          EXEC_SERVER: ${{ secrets.EXEC_SERVER }}
+          EXEC_W: ${{ secrets.EXEC_W }}
         run: |
-          ssh -i private_key root@${{ secrets.EXEC_SERVER }} << 'EOF'
-            # Lösche alte Version und klone erneut
+          sshpass -p "$EXEC_W" ssh -o StrictHostKeyChecking=no root@$EXEC_SERVER << 'EOF'
+            # Lösche alte Version und klone das Repo neu
             rm -rf LLY
             git clone https://github.com/${{ github.repository }}.git LLY
             cd LLY/example/dml
@@ -30,8 +27,12 @@ jobs:
           EOF
 
       - name: Fetch generated files
+        env:
+          EXEC_SERVER: ${{ secrets.EXEC_SERVER }}
+          EXEC_W: ${{ secrets.EXEC_W }}
         run: |
-          scp -i private_key -r root@${{ secrets.EXEC_SERVER }}:/root/LLY/example/dml/* ./generated_files
+          mkdir -p generated_files
+          sshpass -p "$EXEC_W" scp -o StrictHostKeyChecking=no -r root@$EXEC_SERVER:/root/LLY/example/dml/* ./generated_files/
 
       - name: Upload generated files as artifacts
         uses: actions/upload-artifact@v4
